@@ -59,8 +59,12 @@ if (Test-Path -LiteralPath $ResumeDest) {
 New-Item -ItemType Directory -Path $DataDest -Force > $null
 New-Item -ItemType Directory -Path $ResumeDest -Force > $null
 
-Copy-Item -Path (Join-Path $Root "databases\*") -Destination $DataDest -Recurse -Force
-Copy-Item -Path (Join-Path $Root "resumes_by_role\*") -Destination $ResumeDest -Recurse -Force
+Get-ChildItem -LiteralPath (Join-Path $Root "databases") -Force | ForEach-Object {
+  Copy-Item -LiteralPath $_.FullName -Destination $DataDest -Recurse -Force
+}
+Get-ChildItem -LiteralPath (Join-Path $Root "resumes_by_role") -Force | ForEach-Object {
+  Copy-Item -LiteralPath $_.FullName -Destination $ResumeDest -Recurse -Force
+}
 Copy-Item -Path "$Root\README.md" -Destination "$Release\README.md" -Force
 Get-ChildItem -LiteralPath $Root -Filter "AI_PROMPT_*.txt" | ForEach-Object {
   Copy-Item -LiteralPath $_.FullName -Destination "$Release\$($_.Name)" -Force

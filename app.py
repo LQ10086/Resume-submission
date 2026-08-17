@@ -19,6 +19,8 @@ APP_NAME = "投递文本助手"
 DATABASE_DIR = "databases"
 SETTINGS_FILE = "app_settings.json"
 DEFAULT_DB = "默认投递资料.json"
+MOD_SHIFT = 0x0001
+MOD_CONTROL = 0x0004
 
 
 SAMPLE_DATA = {
@@ -360,6 +362,7 @@ class ChipButton(tk.Canvas):
         self.hover = False
         self.dragging = False
         self.press_xy = (0, 0)
+        self.press_state = 0
 
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
@@ -385,6 +388,7 @@ class ChipButton(tk.Canvas):
 
     def _on_press(self, event: tk.Event) -> str:
         self.press_xy = (event.x_root, event.y_root)
+        self.press_state = getattr(event, "state", 0)
         self.dragging = False
         return "break"
 
@@ -396,10 +400,11 @@ class ChipButton(tk.Canvas):
         return "break"
 
     def _on_release(self, event: tk.Event) -> str:
+        state = self.press_state | getattr(event, "state", 0)
         if self.dragging:
             self.drag_command(self.item_key, event.x_root, event.y_root)
         else:
-            self.click_command(self.item_key)
+            self.click_command(self.item_key, state)
         return "break"
 
     def _draw(self) -> None:
@@ -554,16 +559,17 @@ class QuickTextApp:
         self.data: dict[str, str] = {}
         self.filtered_keys: list[str] = []
         self.selected_key: Optional[str] = None
+        self.selected_keys: set[str] = set()
         self.chips: dict[str, ChipButton] = {}
         self.paste_helper = WindowsPasteHelper(root)
 
         self.db_var = tk.StringVar()
         self.search_var = tk.StringVar()
-        self.status_var = tk.StringVar(value="先点击目标输入框，再点击快捷按钮。拖动按钮到输入框可模拟键入。")
+        self.status_var = tk.StringVar(value="先点击目标输入框，再点击快捷按钮。Ctrl+点击强制粘贴，Shift+点击多选。")
         self.target_var = tk.StringVar(value="上一个目标窗口：未捕获")
         self.selected_var = tk.StringVar(value="未选择条目")
         self.preview_var = tk.StringVar(value="")
-        self.auto_paste_var = tk.BooleanVar(value=bool(self.settings.get("auto_paste", True)))
+        self.auto_paste_var = tk.BooleanVar(value=bool(self.settings.get("auto_paste", False)))
         self.topmost_var = tk.BooleanVar(value=bool(self.settings.get("topmost", True)))
         self.chip_font = tkfont.Font(family="Microsoft YaHei UI", size=9)
 
@@ -672,7 +678,7 @@ class QuickTextApp:
 
     def _load_settings(self) -> dict:
         if not SETTINGS_PATH.exists():
-            return {"auto_paste": True, "topmost": True}
+            return {"auto_paste": False, "topmost": True}
         try:
             with SETTINGS_PATH.open("r", encoding="utf-8") as f:
                 loaded = json.load(f)
@@ -680,7 +686,7 @@ class QuickTextApp:
                 return loaded
         except (OSError, json.JSONDecodeError):
             pass
-        return {"auto_paste": True, "topmost": True}
+        return {"auto_paste": False, "topmost": True}
 
     def _save_settings(self) -> None:
         self.settings["auto_paste"] = bool(self.auto_paste_var.get())
@@ -715,6 +721,7 @@ class QuickTextApp:
             self.data = {}
         self.current_db = name
         self.selected_key = None
+        self.selected_keys.clear()
         self._save_settings()
         self.refresh_items()
         self._update_selection()
@@ -789,8 +796,12 @@ class QuickTextApp:
             ]
         else:
             self.filtered_keys = list(self.data.keys())
-        if self.selected_key not in self.data:
+
+        self.selected_keys = {key for key in self.selected_keys if key in self.data}
+        if not self.selected_keys:
             self.selected_key = None
+        elif self.selected_key not in self.selected_keys:
+            self.selected_key = self._ordered_selected_keys()[0]
         self.root.after_idle(self._layout_quick_buttons)
         self._update_selection()
 
@@ -832,7 +843,7 @@ class QuickTextApp:
                 font=self.chip_font,
             )
             chip.place(x=x, y=y)
-            chip.set_selected(key == self.selected_key)
+            chip.set_selected(key in self.selected_keys)
             self.chips[key] = chip
             x += chip_width + gap_x
 
@@ -870,10 +881,14 @@ class QuickTextApp:
         self._save_item(None, key, value)
 
     def edit_selected(self) -> None:
-        if not self.selected_key or self.selected_key not in self.data:
-            messagebox.showinfo("没有可编辑的条目", "请先点击一个快捷按钮。")
+        selected = self._ordered_selected_keys()
+        if len(selected) != 1:
+            if selected:
+                messagebox.showinfo("不能同时编辑", "当前已选择多个条目。请只选择一个条目后再编辑。")
+            else:
+                messagebox.showinfo("没有可编辑的条目", "请先点击一个快捷按钮。")
             return
-        old_key = self.selected_key
+        old_key = selected[0]
         dialog = ItemDialog(
             self.root,
             "编辑条目",
@@ -904,38 +919,70 @@ class QuickTextApp:
 
         self.save_database_to_disk()
         self.selected_key = key
+        self.selected_keys = {key}
         self.refresh_items()
         self.status_var.set(f"已保存：{key}")
 
     def delete_selected(self) -> None:
-        if not self.selected_key or self.selected_key not in self.data:
+        selected = self._ordered_selected_keys()
+        if not selected:
             messagebox.showinfo("没有可删除的条目", "请先点击一个快捷按钮。")
             return
-        key = self.selected_key
-        if not messagebox.askyesno("删除条目", f"确定删除「{key}」？"):
+        if len(selected) == 1:
+            message = f"确定删除「{selected[0]}」？"
+        else:
+            preview = "\n".join(f"- {key}" for key in selected[:6])
+            if len(selected) > 6:
+                preview += f"\n...等 {len(selected)} 项"
+            message = f"确定删除选中的 {len(selected)} 个条目？\n\n{preview}"
+        if not messagebox.askyesno("删除条目", message):
             return
-        del self.data[key]
+        for key in selected:
+            self.data.pop(key, None)
         self.save_database_to_disk()
         self.selected_key = None
+        self.selected_keys.clear()
         self.refresh_items()
-        self.status_var.set(f"已删除：{key}")
+        if len(selected) == 1:
+            self.status_var.set(f"已删除：{selected[0]}")
+        else:
+            self.status_var.set(f"已批量删除 {len(selected)} 个条目")
 
-    def use_item(self, key: str) -> None:
+    def use_item(self, key: str, state: int = 0) -> None:
         if key not in self.data:
             return
+        if state & MOD_SHIFT:
+            self._toggle_selection(key)
+            count = len(self.selected_keys)
+            if count:
+                self.status_var.set(f"已选择 {count} 个条目。可继续 Shift+点击增减选择，或点击删除批量删除。")
+            else:
+                self.status_var.set("已取消选择。")
+            return
+
         self.selected_key = key
+        self.selected_keys = {key}
         self._update_selection()
         self._highlight_selected_chip()
-        result = self.paste_helper.copy_or_paste(self.data[key], self.auto_paste_var.get())
+        force_paste = bool(state & MOD_CONTROL)
+        should_paste = self.auto_paste_var.get() or force_paste
+        result = self.paste_helper.copy_or_paste(self.data[key], should_paste)
         if result == "pasted":
-            self.status_var.set(f"已粘贴：{key}")
+            if force_paste and not self.auto_paste_var.get():
+                self.status_var.set(f"已通过 Ctrl+点击粘贴：{key}")
+            else:
+                self.status_var.set(f"已粘贴：{key}")
         else:
-            self.status_var.set(f"已复制：{key}。如果没有自动填入，请在目标输入框按 Ctrl+V。")
+            if force_paste:
+                self.status_var.set(f"已复制：{key}。Ctrl+点击未能自动填入，请在目标输入框按 Ctrl+V。")
+            else:
+                self.status_var.set(f"已复制：{key}。需要直接填入时可 Ctrl+点击。")
 
     def drag_item(self, key: str, x: int, y: int) -> None:
         if key not in self.data:
             return
         self.selected_key = key
+        self.selected_keys = {key}
         self._update_selection()
         self._highlight_selected_chip()
         result = self.paste_helper.type_at_point(self.data[key], x, y)
@@ -945,14 +992,28 @@ class QuickTextApp:
             self.status_var.set(f"已复制：{key}。拖动位置未识别为外部输入框，请手动 Ctrl+V。")
 
     def _update_selection(self) -> None:
-        if self.selected_key and self.selected_key in self.data:
-            key = self.selected_key
+        selected = self._ordered_selected_keys()
+        count = len(selected)
+        if count == 1:
+            key = selected[0]
+            self.selected_key = key
             self.selected_var.set(f"当前条目：{truncate_text(key, 30)}")
             preview = self.data[key].replace("\n", " ")
             self.preview_var.set(truncate_text(preview, 48))
             self.edit_button.grid()
             self.delete_button.grid()
+            self.edit_button.configure(state="normal")
+            self.delete_button.configure(text="删除", state="normal")
+        elif count > 1:
+            self.selected_key = selected[-1]
+            self.selected_var.set(f"已选择 {count} 个条目")
+            self.preview_var.set("多选状态下不能编辑，可批量删除。")
+            self.edit_button.grid()
+            self.delete_button.grid()
+            self.edit_button.configure(state="disabled")
+            self.delete_button.configure(text=f"删除 {count} 项", state="normal")
         else:
+            self.selected_key = None
             self.selected_var.set("未选择条目")
             self.preview_var.set("")
             self.edit_button.grid_remove()
@@ -960,7 +1021,22 @@ class QuickTextApp:
 
     def _highlight_selected_chip(self) -> None:
         for key, chip in self.chips.items():
-            chip.set_selected(key == self.selected_key)
+            chip.set_selected(key in self.selected_keys)
+
+    def _ordered_selected_keys(self) -> list[str]:
+        return [key for key in self.data if key in self.selected_keys]
+
+    def _toggle_selection(self, key: str) -> None:
+        if key in self.selected_keys:
+            self.selected_keys.remove(key)
+            if self.selected_key == key:
+                ordered = self._ordered_selected_keys()
+                self.selected_key = ordered[-1] if ordered else None
+        else:
+            self.selected_keys.add(key)
+            self.selected_key = key
+        self._update_selection()
+        self._highlight_selected_chip()
 
     def _apply_topmost(self) -> None:
         self.root.attributes("-topmost", bool(self.topmost_var.get()))
