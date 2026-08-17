@@ -21,18 +21,20 @@ SETTINGS_FILE = "app_settings.json"
 DEFAULT_DB = "默认投递资料.json"
 MOD_SHIFT = 0x0001
 MOD_CONTROL = 0x0004
+DEFAULT_GROUP = "未分组"
+BASIC_GROUP = "基本信息"
 
 
 SAMPLE_DATA = {
-    "姓名": "请在这里填写你的姓名",
-    "手机号": "请在这里填写你的手机号",
-    "邮箱": "your.name@example.com",
-    "实习经历-示例-经历名称": "公司/机构名称 | 岗位名称",
-    "实习经历-示例-经历角色": "实习生",
-    "实习经历-示例-经历详情": "工作内容：用 2-3 句话概括你的核心职责、业务场景和结果。1) 负责... 2) 协助... 3) 输出...",
-    "科研经历-示例-经历名称": "课题名称 | 投稿/发表信息",
-    "科研经历-示例-经历角色": "学生一作 / 主要参与人",
-    "科研经历-示例-经历详情": "论文内容：说明研究问题、方法、你的贡献和阶段性成果。1) ... 2) ... 3) ...",
+    "姓名": "XXX",
+    "手机号": "XXX",
+    "邮箱": "XXX",
+    "实习经历-实习A-经历名称": "XXX",
+    "实习经历-实习A-经历角色": "XXX",
+    "实习经历-实习A-经历详情": "工作内容：XXX。1) XXX。2) XXX。3) XXX。",
+    "科研经历-科研项目A-经历名称": "XXX",
+    "科研经历-科研项目A-经历角色": "XXX",
+    "科研经历-科研项目A-经历详情": "论文内容：XXX。1) XXX。2) XXX。3) XXX。",
 }
 
 
@@ -65,22 +67,31 @@ def truncate_text(text: str, max_chars: int = 24) -> str:
     return text[: max_chars - 1] + "…"
 
 
-def read_json_file(path: Path) -> dict[str, str]:
-    if not path.exists():
+def normalize_group_name(group_name: object) -> str:
+    text = str(group_name or "").strip()
+    return text or DEFAULT_GROUP
+
+
+def infer_group_name(key: str) -> str:
+    key = key.strip()
+    basic_keys = {"姓名", "手机号", "邮箱", "微信", "所在地", "求职方向", "性别", "籍贯"}
+    if key in basic_keys:
+        return BASIC_GROUP
+    if key.startswith(("技能", "荣誉", "证书", "语言")):
+        return "技能证书"
+    parts = key.split("-")
+    if len(parts) >= 3 and parts[1].strip():
+        return parts[1].strip()
+    if len(parts) >= 2 and parts[0].strip():
+        return parts[0].strip()
+    return DEFAULT_GROUP
+
+
+def _coerce_items(raw_items: object) -> dict[str, str]:
+    if not isinstance(raw_items, dict):
         return {}
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"JSON 格式错误：第 {exc.lineno} 行，第 {exc.colno} 列") from exc
-
-    if isinstance(raw, dict) and isinstance(raw.get("items"), dict):
-        raw = raw["items"]
-    if not isinstance(raw, dict):
-        raise ValueError("资料库必须是 JSON 对象，例如 {\"姓名\": \"张三\"}")
-
     data: dict[str, str] = {}
-    for key, value in raw.items():
+    for key, value in raw_items.items():
         if key is None:
             continue
         text_key = str(key).strip()
@@ -93,12 +104,88 @@ def read_json_file(path: Path) -> dict[str, str]:
     return data
 
 
-def write_json_file(path: Path, data: dict[str, str]) -> None:
+def read_json_file(path: Path) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    if not path.exists():
+        return {}, {}, []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON 格式错误：第 {exc.lineno} 行，第 {exc.colno} 列") from exc
+
+    if not isinstance(raw, dict):
+        raise ValueError("资料库必须是 JSON 对象，例如 {\"groups\": {\"基本信息\": {\"姓名\": \"XXX\"}}}")
+
+    data: dict[str, str] = {}
+    group_by_key: dict[str, str] = {}
+    group_order: list[str] = []
+
+    groups = raw.get("groups")
+    if isinstance(groups, dict):
+        for group_name, raw_items in groups.items():
+            group = normalize_group_name(group_name)
+            items = _coerce_items(raw_items)
+            if group not in group_order:
+                group_order.append(group)
+            for key, value in items.items():
+                data[key] = value
+                group_by_key[key] = group
+        return data, group_by_key, group_order
+
+    if isinstance(groups, list):
+        for raw_group in groups:
+            if not isinstance(raw_group, dict):
+                continue
+            group = normalize_group_name(raw_group.get("name"))
+            items = _coerce_items(raw_group.get("items"))
+            if group not in group_order:
+                group_order.append(group)
+            for key, value in items.items():
+                data[key] = value
+                group_by_key[key] = group
+        return data, group_by_key, group_order
+
+    if isinstance(raw.get("items"), dict):
+        flat_items = _coerce_items(raw["items"])
+    else:
+        flat_items = _coerce_items(raw)
+    for key, value in flat_items.items():
+        group = infer_group_name(key)
+        data[key] = value
+        group_by_key[key] = group
+        if group not in group_order:
+            group_order.append(group)
+    return data, group_by_key, group_order
+
+
+def write_json_file(
+    path: Path,
+    data: dict[str, str],
+    group_by_key: Optional[dict[str, str]] = None,
+    group_order: Optional[list[str]] = None,
+) -> None:
+    group_by_key = group_by_key or {}
+    group_order = group_order or []
+    ordered_groups: list[str] = []
+    for group in group_order:
+        group = normalize_group_name(group)
+        if group not in ordered_groups:
+            ordered_groups.append(group)
+    for key in data:
+        group = normalize_group_name(group_by_key.get(key) or infer_group_name(key))
+        if group not in ordered_groups:
+            ordered_groups.append(group)
+
+    grouped: dict[str, dict[str, str]] = {}
+    for group in ordered_groups:
+        items = {key: value for key, value in data.items() if normalize_group_name(group_by_key.get(key) or infer_group_name(key)) == group}
+        if items:
+            grouped[group] = items
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump({"groups": grouped}, f, ensure_ascii=False, indent=2)
         f.write("\n")
-
 
 class KeyBdInput(ctypes.Structure):
     _fields_ = [
@@ -338,6 +425,7 @@ class ChipButton(tk.Canvas):
         height: int,
         click_command,
         drag_command,
+        drag_preview_command,
         wheel_command,
         font: tkfont.Font,
     ) -> None:
@@ -356,6 +444,7 @@ class ChipButton(tk.Canvas):
         self.chip_height = height
         self.click_command = click_command
         self.drag_command = drag_command
+        self.drag_preview_command = drag_preview_command
         self.wheel_command = wheel_command
         self.font = font
         self.selected = False
@@ -397,11 +486,13 @@ class ChipButton(tk.Canvas):
         dy = abs(event.y_root - self.press_xy[1])
         if dx + dy > 14:
             self.dragging = True
+            self.drag_preview_command(self.item_key, event.x_root, event.y_root, True)
         return "break"
 
     def _on_release(self, event: tk.Event) -> str:
         state = self.press_state | getattr(event, "state", 0)
         if self.dragging:
+            self.drag_preview_command(self.item_key, event.x_root, event.y_root, False)
             self.drag_command(self.item_key, event.x_root, event.y_root)
         else:
             self.click_command(self.item_key, state)
@@ -468,9 +559,10 @@ class ItemDialog:
         title: str,
         initial_key: str = "",
         initial_value: str = "",
+        initial_group: str = DEFAULT_GROUP,
         topmost: bool = False,
     ) -> None:
-        self.result: Optional[tuple[str, str]] = None
+        self.result: Optional[tuple[str, str, str]] = None
         self.window = tk.Toplevel(parent)
         self.window.title(title)
         self.window.geometry("620x360")
@@ -481,6 +573,7 @@ class ItemDialog:
             self.window.attributes("-topmost", True)
 
         self.key_var = tk.StringVar(value=initial_key)
+        self.group_var = tk.StringVar(value=normalize_group_name(initial_group))
         self._build_ui()
         self.text.insert("1.0", initial_value)
         self.window.bind("<Control-s>", lambda _event: self._save())
@@ -500,15 +593,19 @@ class ItemDialog:
         outer = ttk.Frame(self.window, padding=14)
         outer.grid(row=0, column=0, sticky="nsew")
         outer.columnconfigure(0, weight=1)
+        outer.columnconfigure(1, weight=1)
         outer.rowconfigure(3, weight=1)
 
         ttk.Label(outer, text="键名").grid(row=0, column=0, sticky="w")
+        ttk.Label(outer, text="分组").grid(row=0, column=1, sticky="w", padx=(10, 0))
         self.key_entry = ttk.Entry(outer, textvariable=self.key_var)
         self.key_entry.grid(row=1, column=0, sticky="ew", pady=(4, 12))
+        self.group_entry = ttk.Entry(outer, textvariable=self.group_var)
+        self.group_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=(4, 12))
 
-        ttk.Label(outer, text="文本内容").grid(row=2, column=0, sticky="w")
+        ttk.Label(outer, text="文本内容").grid(row=2, column=0, columnspan=2, sticky="w")
         text_shell = ttk.Frame(outer)
-        text_shell.grid(row=3, column=0, sticky="nsew", pady=(4, 12))
+        text_shell.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=(4, 12))
         text_shell.columnconfigure(0, weight=1)
         text_shell.rowconfigure(0, weight=1)
         self.text = tk.Text(
@@ -528,18 +625,87 @@ class ItemDialog:
         scroll.grid(row=0, column=1, sticky="ns")
 
         actions = ttk.Frame(outer)
-        actions.grid(row=4, column=0, sticky="ew")
+        actions.grid(row=4, column=0, columnspan=2, sticky="ew")
         actions.columnconfigure(0, weight=1)
         ttk.Button(actions, text="取消", command=self._cancel).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(actions, text="保存", command=self._save, style="Accent.TButton").grid(row=0, column=2)
 
     def _save(self) -> None:
         key = self.key_var.get().strip()
+        group = normalize_group_name(self.group_var.get())
         value = self.text.get("1.0", "end-1c")
         if not key:
             messagebox.showwarning("缺少键名", "请先填写键名。", parent=self.window)
             return
-        self.result = (key, value)
+        self.result = (key, value, group)
+        self.window.destroy()
+
+    def _cancel(self) -> None:
+        self.result = None
+        self.window.destroy()
+
+
+class GroupDialog:
+    def __init__(
+        self,
+        parent: tk.Tk,
+        groups: list[str],
+        initial_group: str = "",
+        topmost: bool = False,
+    ) -> None:
+        self.result: Optional[str] = None
+        self.groups = [normalize_group_name(group) for group in groups]
+        self.window = tk.Toplevel(parent)
+        self.window.title("调整分组")
+        self.window.geometry("420x180")
+        self.window.minsize(360, 160)
+        self.window.transient(parent)
+        self.window.configure(bg="#f6f7f9")
+        if topmost:
+            self.window.attributes("-topmost", True)
+
+        self.existing_var = tk.StringVar(value=initial_group if initial_group in self.groups else "")
+        self.new_var = tk.StringVar()
+        self._build_ui()
+        self.window.bind("<Control-s>", lambda _event: self._save())
+        self.window.bind("<Return>", lambda _event: self._save())
+        self.window.bind("<Escape>", lambda _event: self._cancel())
+        self.window.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.window.grab_set()
+        if initial_group:
+            self.combo.focus_set()
+        else:
+            self.new_entry.focus_set()
+        parent.wait_window(self.window)
+
+    def _build_ui(self) -> None:
+        self.window.columnconfigure(0, weight=1)
+
+        outer = ttk.Frame(self.window, padding=14)
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.columnconfigure(0, weight=1)
+
+        ttk.Label(outer, text="选择现有分组").grid(row=0, column=0, sticky="w")
+        self.combo = ttk.Combobox(outer, textvariable=self.existing_var, values=self.groups, state="readonly")
+        self.combo.grid(row=1, column=0, sticky="ew", pady=(4, 12))
+
+        ttk.Label(outer, text="或输入新分组名").grid(row=2, column=0, sticky="w")
+        self.new_entry = ttk.Entry(outer, textvariable=self.new_var)
+        self.new_entry.grid(row=3, column=0, sticky="ew", pady=(4, 14))
+
+        actions = ttk.Frame(outer)
+        actions.grid(row=4, column=0, sticky="ew")
+        actions.columnconfigure(0, weight=1)
+        ttk.Button(actions, text="取消", command=self._cancel).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(actions, text="保存", command=self._save, style="Accent.TButton").grid(row=0, column=2)
+
+    def _save(self) -> None:
+        raw_group = self.new_var.get().strip() or self.existing_var.get().strip()
+        if not raw_group:
+            messagebox.showwarning("缺少分组名", "请选择现有分组或输入新分组名。", parent=self.window)
+            return
+        group = normalize_group_name(raw_group)
+        self.result = group
         self.window.destroy()
 
     def _cancel(self) -> None:
@@ -557,10 +723,14 @@ class QuickTextApp:
         self.settings = self._load_settings()
         self.current_db = ""
         self.data: dict[str, str] = {}
+        self.group_by_key: dict[str, str] = {}
+        self.group_order: list[str] = []
         self.filtered_keys: list[str] = []
         self.selected_key: Optional[str] = None
         self.selected_keys: set[str] = set()
         self.chips: dict[str, ChipButton] = {}
+        self.drag_ghost: Optional[tk.Toplevel] = None
+        self.drag_ghost_label: Optional[tk.Label] = None
         self.paste_helper = WindowsPasteHelper(root)
 
         self.db_var = tk.StringVar()
@@ -652,10 +822,13 @@ class QuickTextApp:
         ttk.Label(selection, textvariable=self.selected_var, style="Muted.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(selection, textvariable=self.preview_var, style="Muted.TLabel").grid(row=0, column=1, sticky="w", padx=(12, 8))
         self.edit_button = ttk.Button(selection, text="编辑", command=self.edit_selected)
+        self.group_button = ttk.Button(selection, text="分组", command=self.change_group_selected)
         self.delete_button = ttk.Button(selection, text="删除", command=self.delete_selected, style="Danger.TButton")
         self.edit_button.grid(row=0, column=2, padx=(8, 4))
-        self.delete_button.grid(row=0, column=3, padx=4)
+        self.group_button.grid(row=0, column=3, padx=4)
+        self.delete_button.grid(row=0, column=4, padx=4)
         self.edit_button.grid_remove()
+        self.group_button.grid_remove()
         self.delete_button.grid_remove()
 
         footer = ttk.Frame(self.root, padding=(12, 0, 12, 10))
@@ -715,10 +888,12 @@ class QuickTextApp:
 
     def load_database(self, name: str) -> None:
         try:
-            self.data = read_json_file(DB_DIR / name)
+            self.data, self.group_by_key, self.group_order = read_json_file(DB_DIR / name)
         except ValueError as exc:
             messagebox.showerror("资料库无法打开", f"{name}\n\n{exc}")
             self.data = {}
+            self.group_by_key = {}
+            self.group_order = []
         self.current_db = name
         self.selected_key = None
         self.selected_keys.clear()
@@ -729,7 +904,7 @@ class QuickTextApp:
 
     def save_database_to_disk(self) -> None:
         if self.current_db:
-            write_json_file(DB_DIR / self.current_db, self.data)
+            write_json_file(DB_DIR / self.current_db, self.data, self.group_by_key, self.group_order)
 
     def on_database_selected(self, _event: tk.Event) -> None:
         selected = self.db_var.get()
@@ -745,7 +920,7 @@ class QuickTextApp:
         if path.exists():
             messagebox.showwarning("名称已存在", f"{filename} 已经存在。")
             return
-        write_json_file(path, {})
+        write_json_file(path, {}, {}, [])
         self._refresh_databases()
         self.db_var.set(filename)
         self.load_database(filename)
@@ -797,6 +972,7 @@ class QuickTextApp:
         else:
             self.filtered_keys = list(self.data.keys())
 
+        self._normalize_group_state()
         self.selected_keys = {key for key in self.selected_keys if key in self.data}
         if not self.selected_keys:
             self.selected_key = None
@@ -811,7 +987,6 @@ class QuickTextApp:
         self.chips = {}
 
         width = max(self.quick_canvas.winfo_width() - 8, 320)
-        x = 8
         y = 8
         row_height = 34
         gap_x = 8
@@ -825,37 +1000,151 @@ class QuickTextApp:
             self.quick_canvas.configure(scrollregion=(0, 0, width, 52))
             return
 
-        for key in self.filtered_keys:
-            display = truncate_text(key, 24)
-            chip_width = min(max(self.chip_font.measure(display) + 28, 58), 260)
-            if x + chip_width + 8 > width and x > 8:
-                x = 8
-                y += row_height + gap_y
-            chip = ChipButton(
-                self.quick_frame,
-                item_key=key,
-                display_text=display,
-                width=chip_width,
-                height=row_height,
-                click_command=self.use_item,
-                drag_command=self.drag_item,
-                wheel_command=self._on_mouse_wheel,
-                font=self.chip_font,
-            )
-            chip.place(x=x, y=y)
-            chip.set_selected(key in self.selected_keys)
-            self.chips[key] = chip
-            x += chip_width + gap_x
+        group_width = max(width - 16, 300)
+        for group, keys in self._filtered_groups():
+            positions: list[tuple[str, str, int, int, int]] = []
+            x = 16
+            inner_y = 34
+            inner_width = max(group_width - 32, 260)
+            for key in keys:
+                display = truncate_text(key, 24)
+                chip_width = min(max(self.chip_font.measure(display) + 28, 58), 260)
+                if x + chip_width > inner_width + 16 and x > 16:
+                    x = 16
+                    inner_y += row_height + gap_y
+                positions.append((key, display, chip_width, x, inner_y))
+                x += chip_width + gap_x
 
-        total_height = y + row_height + 10
+            group_height = inner_y + row_height + 14
+            group_canvas = tk.Canvas(
+                self.quick_frame,
+                width=group_width,
+                height=group_height,
+                bg="#ffffff",
+                highlightthickness=0,
+                bd=0,
+            )
+            group_canvas.place(x=8, y=y)
+            self._bind_wheel(group_canvas)
+            self._draw_group_box(group_canvas, group_width, group_height, group)
+
+            for key, display, chip_width, chip_x, chip_y in positions:
+                chip = ChipButton(
+                    group_canvas,
+                    item_key=key,
+                    display_text=display,
+                    width=chip_width,
+                    height=row_height,
+                    click_command=self.use_item,
+                    drag_command=self.drag_item,
+                    drag_preview_command=self.update_drag_preview,
+                    wheel_command=self._on_mouse_wheel,
+                    font=self.chip_font,
+                )
+                chip.place(x=chip_x, y=chip_y)
+                chip.set_selected(key in self.selected_keys)
+                self.chips[key] = chip
+
+            y += group_height + gap_y
+
+        total_height = y + 2
         self.quick_frame.configure(width=width, height=total_height)
         self.quick_canvas.itemconfigure(self.quick_window, width=width)
         self.quick_canvas.configure(scrollregion=(0, 0, width, total_height))
+
+    def _draw_group_box(self, canvas: tk.Canvas, width: int, height: int, group: str) -> None:
+        radius = 12
+        x1, y1, x2, y2 = 1, 12, width - 1, height - 1
+        points = [
+            x1 + radius,
+            y1,
+            x2 - radius,
+            y1,
+            x2,
+            y1,
+            x2,
+            y1 + radius,
+            x2,
+            y2 - radius,
+            x2,
+            y2,
+            x2 - radius,
+            y2,
+            x1 + radius,
+            y2,
+            x1,
+            y2,
+            x1,
+            y2 - radius,
+            x1,
+            y1 + radius,
+            x1,
+            y1,
+        ]
+        canvas.create_polygon(points, smooth=True, splinesteps=16, fill="#ffffff", outline="#d8dee9")
+        title = truncate_text(group, 22)
+        title_width = self.chip_font.measure(title) + 18
+        canvas.create_rectangle(12, 3, 12 + title_width, 21, fill="#ffffff", outline="#ffffff")
+        canvas.create_text(20, 12, anchor="w", text=title, fill="#374151", font=("Microsoft YaHei UI", 9, "bold"))
 
     def _bind_wheel(self, widget: tk.Widget) -> None:
         widget.bind("<MouseWheel>", self._on_mouse_wheel)
         widget.bind("<Button-4>", self._on_mouse_wheel)
         widget.bind("<Button-5>", self._on_mouse_wheel)
+
+    def _normalize_group_state(self) -> None:
+        for key in self.data:
+            self.group_by_key[key] = normalize_group_name(self.group_by_key.get(key) or infer_group_name(key))
+
+        seen: list[str] = []
+        for group in self.group_order:
+            group = normalize_group_name(group)
+            if group not in seen and any(self.group_by_key.get(key) == group for key in self.data):
+                seen.append(group)
+        for key in self.data:
+            group = self.group_by_key[key]
+            if group not in seen:
+                seen.append(group)
+        self.group_order = seen
+
+    def _filtered_groups(self) -> list[tuple[str, list[str]]]:
+        self._normalize_group_state()
+        grouped: list[tuple[str, list[str]]] = []
+        for group in self.group_order:
+            keys = [key for key in self.filtered_keys if self.group_by_key.get(key) == group]
+            if keys:
+                grouped.append((group, keys))
+        return grouped
+
+    def update_drag_preview(self, key: str, x: int, y: int, visible: bool) -> None:
+        if not visible:
+            if self.drag_ghost is not None:
+                self.drag_ghost.withdraw()
+            return
+        if self.drag_ghost is None:
+            self.drag_ghost = tk.Toplevel(self.root)
+            self.drag_ghost.overrideredirect(True)
+            self.drag_ghost.attributes("-topmost", True)
+            try:
+                self.drag_ghost.attributes("-alpha", 0.78)
+            except tk.TclError:
+                pass
+            self.drag_ghost_label = tk.Label(
+                self.drag_ghost,
+                bg="#dbeafe",
+                fg="#1f2937",
+                bd=1,
+                relief="solid",
+                padx=10,
+                pady=5,
+                font=("Microsoft YaHei UI", 9),
+            )
+            self.drag_ghost_label.pack()
+        if self.drag_ghost_label is not None:
+            self.drag_ghost_label.configure(text=truncate_text(key, 28))
+        self.drag_ghost.geometry(f"+{int(x) + 16}+{int(y) + 16}")
+        self.drag_ghost.deiconify()
+        self.drag_ghost.lift()
 
     def _on_quick_canvas_configure(self, event: tk.Event) -> None:
         self.quick_canvas.itemconfigure(self.quick_window, width=event.width)
@@ -877,8 +1166,8 @@ class QuickTextApp:
         dialog = ItemDialog(self.root, "新增条目", topmost=bool(self.topmost_var.get()))
         if not dialog.result:
             return
-        key, value = dialog.result
-        self._save_item(None, key, value)
+        key, value, group = dialog.result
+        self._save_item(None, key, value, group)
 
     def edit_selected(self) -> None:
         selected = self._ordered_selected_keys()
@@ -894,14 +1183,16 @@ class QuickTextApp:
             "编辑条目",
             initial_key=old_key,
             initial_value=self.data[old_key],
+            initial_group=self.group_by_key.get(old_key, infer_group_name(old_key)),
             topmost=bool(self.topmost_var.get()),
         )
         if not dialog.result:
             return
-        key, value = dialog.result
-        self._save_item(old_key, key, value)
+        key, value, group = dialog.result
+        self._save_item(old_key, key, value, group)
 
-    def _save_item(self, old_key: Optional[str], key: str, value: str) -> None:
+    def _save_item(self, old_key: Optional[str], key: str, value: str, group: str) -> None:
+        group = normalize_group_name(group)
         if old_key != key and key in self.data:
             if not messagebox.askyesno("覆盖已有条目", f"{key} 已存在，是否覆盖？"):
                 return
@@ -914,14 +1205,62 @@ class QuickTextApp:
                 elif item_key != key:
                     new_data[item_key] = item_value
             self.data = new_data
+            self.group_by_key.pop(old_key, None)
         else:
             self.data[key] = value
 
+        self.group_by_key[key] = group
+        if group not in self.group_order:
+            self.group_order.append(group)
+        self._normalize_group_state()
         self.save_database_to_disk()
         self.selected_key = key
         self.selected_keys = {key}
         self.refresh_items()
         self.status_var.set(f"已保存：{key}")
+
+    def change_group_selected(self) -> None:
+        selected = self._ordered_selected_keys()
+        if not selected:
+            messagebox.showinfo("没有可调整的条目", "请先点击一个快捷按钮，或用 Shift+点击选择多个条目。")
+            return
+
+        self._normalize_group_state()
+        selected_groups = {self.group_by_key.get(key, infer_group_name(key)) for key in selected}
+        initial_group = next(iter(selected_groups)) if len(selected_groups) == 1 else ""
+        dialog = GroupDialog(
+            self.root,
+            groups=self.group_order,
+            initial_group=initial_group,
+            topmost=bool(self.topmost_var.get()),
+        )
+        if not dialog.result:
+            return
+
+        changed_count = self._move_keys_to_group(selected, dialog.result)
+        if changed_count == 1:
+            self.status_var.set(f"已调整分组：{selected[0]} -> {dialog.result}")
+        elif changed_count > 1:
+            self.status_var.set(f"已将 {changed_count} 个条目调整到分组：{dialog.result}")
+
+    def _move_keys_to_group(self, keys: list[str], group: str) -> int:
+        group = normalize_group_name(group)
+        valid_keys = [key for key in keys if key in self.data]
+        if not valid_keys:
+            return 0
+
+        for key in valid_keys:
+            self.group_by_key[key] = group
+        if group not in self.group_order:
+            self.group_order.append(group)
+
+        self._normalize_group_state()
+        self.save_database_to_disk()
+        self.selected_keys = set(valid_keys)
+        if self.selected_key not in self.selected_keys:
+            self.selected_key = valid_keys[-1]
+        self.refresh_items()
+        return len(valid_keys)
 
     def delete_selected(self) -> None:
         selected = self._ordered_selected_keys()
@@ -939,6 +1278,8 @@ class QuickTextApp:
             return
         for key in selected:
             self.data.pop(key, None)
+            self.group_by_key.pop(key, None)
+        self._normalize_group_state()
         self.save_database_to_disk()
         self.selected_key = None
         self.selected_keys.clear()
@@ -1001,22 +1342,27 @@ class QuickTextApp:
             preview = self.data[key].replace("\n", " ")
             self.preview_var.set(truncate_text(preview, 48))
             self.edit_button.grid()
+            self.group_button.grid()
             self.delete_button.grid()
             self.edit_button.configure(state="normal")
+            self.group_button.configure(state="normal")
             self.delete_button.configure(text="删除", state="normal")
         elif count > 1:
             self.selected_key = selected[-1]
             self.selected_var.set(f"已选择 {count} 个条目")
-            self.preview_var.set("多选状态下不能编辑，可批量删除。")
+            self.preview_var.set("多选状态下可调整分组或批量删除。")
             self.edit_button.grid()
+            self.group_button.grid()
             self.delete_button.grid()
             self.edit_button.configure(state="disabled")
+            self.group_button.configure(state="normal")
             self.delete_button.configure(text=f"删除 {count} 项", state="normal")
         else:
             self.selected_key = None
             self.selected_var.set("未选择条目")
             self.preview_var.set("")
             self.edit_button.grid_remove()
+            self.group_button.grid_remove()
             self.delete_button.grid_remove()
 
     def _highlight_selected_chip(self) -> None:
@@ -1053,6 +1399,8 @@ class QuickTextApp:
 
     def on_close(self) -> None:
         self._save_settings()
+        if self.drag_ghost is not None:
+            self.drag_ghost.destroy()
         self.root.destroy()
 
 
