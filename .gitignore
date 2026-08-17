@@ -1,6 +1,3 @@
 __pycache__/
 *.pyc
-build/
-release/
 *.spec
-app_settings.json
