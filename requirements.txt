@@ -1,0 +1,2 @@
+# 运行程序不需要额外第三方库，Python 自带 tkinter 即可。
+# 打包 exe 时 build_exe.ps1 会自动安装/调用 PyInstaller。
