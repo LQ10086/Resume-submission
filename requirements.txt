@@ -1,2 +1,5 @@
-# 运行程序不需要额外第三方库，Python 自带 tkinter 即可。
+# 终端伪控制台，用于在 Tkinter 面板中运行 PowerShell/CMD/codex。
+pywinpty>=2.0.15
+# ANSI 终端模拟器，用于正确渲染 codex 等交互式命令行界面。
+pyte>=0.8.2
 # 打包 exe 时 build_exe.ps1 会自动安装/调用 PyInstaller。
