@@ -1,2 +1,10 @@
-# 运行程序不需要额外第三方库，Python 自带 tkinter 即可。
-# 打包 exe 时 build_exe.ps1 会自动安装/调用 PyInstaller。
+# Qt 6 桌面界面。锁定已验证版本，避免不同 Qt DLL 组合造成启动差异。
+PySide6==6.10.1
+# 终端伪控制台，用于在 PySide6 面板中运行 PowerShell/CMD/codex。
+pywinpty>=3.0.5
+# ANSI 终端模拟器，用于正确渲染 codex 等交互式命令行界面。
+pyte>=0.8.2
+# 中文、Emoji 等宽字符的终端列宽计算，用于准确绘制光标。
+wcwidth>=0.2.13
+# 打包 exe 时 build_exe.ps1 优先使用项目 .venv 并自动检查依赖。
+PyInstaller>=6.0

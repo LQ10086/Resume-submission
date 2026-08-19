@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 *.spec
+tmp/
+.venv/
+.python-runtime/
+python313-install.log
+app_settings.json
+release/databases/ICLR.json
+release/app_settings.json
