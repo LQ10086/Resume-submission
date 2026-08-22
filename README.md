@@ -12,7 +12,7 @@ release\ResumeQuickPaste.exe
 
 发布版面向 Windows 10/11 64 位系统，Python、PySide6/Qt、终端渲染器等运行依赖已包含在 exe 中，其他电脑无需安装 Python 或 Qt。Office、WPS、LibreOffice 和编辑器不会被打包；程序会在每台电脑上动态读取该机的 32/64 位应用注册信息，因此“打开方式”只显示该机实际注册的应用。注册表信息缺失或损坏时，菜单仍会保留 Windows 系统“选择其他应用”。
 
-程序优先把 `databases` 和 `app_settings.json` 保存在 exe 同级，便于整包复制。若 exe 位于 `Program Files` 等当前用户不可写的目录，会自动改用 `%LOCALAPPDATA%\ResumeQuickPaste`，首次使用时只复制随程序附带的资料库，不覆盖已存在的数据。需要指定数据位置时，可以在启动前设置环境变量 `RESUME_QUICK_PASTE_HOME`。
+程序默认把个人文件集中保存在运行目录下的 `user_data` 文件夹，包括 `databases`、`resumes_by_role`、`app_settings.json`、坚果云同步账号、备份和运行时 `tmp`。若 exe 位于 `Program Files` 等当前用户不可写的目录，会自动改用 `%LOCALAPPDATA%\ResumeQuickPaste\user_data`。首次使用新版时会从旧位置复制随程序附带或已有的资料库，不覆盖 `user_data` 里已经存在的数据。需要指定数据位置时，可以在启动前设置环境变量 `RESUME_QUICK_PASTE_HOME`。
 
 源码版已经迁移到 PySide6，所有 Python 运行代码统一放在 `src` 目录。首次双击 `run.bat` 时，`setup_pyside6.ps1` 会在项目内创建隔离的 `.python-runtime`，使用 python.org 便携版 Python 3.13 和锁定的 PySide6 6.10.1，不修改系统默认 Python，也不依赖本机 Conda。旧 Tkinter 实现在 `src/legacy_tk_app.py` 中保留作迁移参考；迁移前 Git 回退点为本地分支 `backup/pre-pyside6-20260822`。
 
@@ -37,13 +37,13 @@ release\ResumeQuickPaste.exe
 
 ## 终端与设置
 
-- 顶部“设置”菜单可以打开设置窗口，也可以直接打开终端。
+- 顶部“设置”菜单可以打开设置窗口、数据同步窗口，也可以直接打开终端。
 - 右侧区域包含“终端”和“信息”两个标签页。点击左侧任意条目会自动打开“信息”页，可直接修改键名、分组、条目类型和内容并保存；“弹窗编辑”仍保留原有编辑窗口。
 - 默认快捷键是 `Ctrl+J`：第一次按下显示终端，再次按下隐藏终端；快捷键可在“设置 → 快捷键”中点击“更改快捷键”，然后直接按下新的组合键识别保存。
 - “设置 → 快捷键”可以分别修改打开/隐藏终端、新增条目、编辑条目、搜索、名称查找替换、组内左右移动、分组上下移动和资源管理器定位快捷键。
 - `Ctrl+F` 聚焦顶部搜索框并全选现有关键词，可搜索条目名称或内容；`Ctrl+R` 打开“查找并替换条目名称”，实时显示命中数量并支持批量替换。替换后若名称为空或发生重名，程序会在写入 JSON 前阻止操作。
 - 设置窗口的“快捷键”“终端”“外观”页均支持鼠标滚轮和右侧滚动条；切换标签后滚轮只滚动当前页，底部保存/取消按钮保持固定。
-- 终端默认使用 PowerShell，工作目录默认是相对项目目录的 `tmp`；程序会自动创建该目录。打包版如果位于项目的 `release` 文件夹，会优先使用项目根目录下的 `tmp`，便于源码版和打包版共用。
+- 终端默认使用 PowerShell，工作目录显示为 `tmp`，实际会创建在当前数据目录的 `user_data\tmp`；如果你在设置里填写其他相对路径，则仍按项目目录解析。
 - “设置 → 终端”可以切换 PowerShell/CMD、修改默认路径、终端字体和字号，并设置终端启动后自动输入的命令；默认命令是 `codex`，需要时可以清空。新设置优先使用 Cascadia Mono；如果目标电脑没有该字体，Qt 会自动回退到 Cascadia Code、JetBrains Mono、Consolas 或系统等宽字体。
 - 终端使用与主界面一致的主题和等宽字体；默认停靠在主界面右侧，也可以在“设置 → 终端 → 停靠位置”切回底部。拖动分隔条时先显示位置预览，松开后再一次性重排内容；终端尺寸同步也会自动合并，避免左右调整宽度时卡顿。关闭终端面板不会结束终端进程，退出主程序时会结束该终端进程。
 - 终端光标按实际显示列定位，中文、Emoji 等双宽字符不会再导致光标与输入末尾逐渐错位。
@@ -59,9 +59,22 @@ release\ResumeQuickPaste.exe
 - 主窗口默认宽度调整为 1240 像素，右侧终端默认宽度为 520 像素；“终端 / 信息”容器不设置最小宽度，可以向右连续拖动到完全折叠，不会在固定阈值处停止。左侧条目区不会被折叠；右侧宽度大于 0 时会保存到个人设置。
 - “设置 → 外观”可切换“明亮蓝”“柔和灰”和“JetBrains 灰色”主题，主界面、条目卡片、弹窗和内置终端会同步换色。
 
+## 坚果云数据同步
+
+数据同步通过坚果云 WebDAV 实现。使用前需要先有坚果云账号，可以从 https://cpclanding.jianguoyun.com/ 注册；登录本工具时请填写坚果云账号邮箱和“第三方应用密码”，不是网页登录密码。第三方应用密码需要在坚果云网页端的“账户信息 → 安全选项 → 第三方应用管理”中生成，说明见 https://help.jianguoyun.com/?p=2064。
+
+打开“设置 → 数据同步”：
+
+1. 第一次使用会弹出登录窗口，填写账号邮箱、第三方应用密码和云端目录后点击“登录并保存”。账号信息保存在 `user_data\jianguoyun_sync.json`，同一台设备下次会直接进入同步选项。
+2. 已登录后会直接弹出同步窗口。点击“上传本地到云端”会把 `user_data\databases` 中的 JSON 资料库上传到坚果云，同名云端文件会被覆盖，操作前会再次确认。
+3. 点击“下载云端到本地”会从坚果云下载 JSON 资料库并覆盖本地同名文件，操作前会再次确认；程序会先把当前本地资料库备份到 `user_data\backups\databases`，本地独有的其他 JSON 文件不会被删除。
+4. 需要更换坚果云账号或应用密码时，在同步窗口点击“修改账号”即可重新登录。
+
+默认云端目录是 `/ResumeQuickPaste/databases`。这个功能只在你点击同步按钮时上传或下载资料库，不会在后台自动监听文件变化。
+
 ## 使用 Codex 升级
 
-旧版本用户只需在项目根目录对 Codex 说“更新一下这个项目”。根目录的 `AGENTS.md` 会要求 Codex 先阅读 `UPGRADE_FOR_CODEX.md`，并保护已有的资料库、简历、设置和 `tmp` 文件；升级完成后使用 `build_exe.ps1` 重新生成程序。
+旧版本用户只需在项目根目录对 Codex 说“更新一下这个项目”。根目录的 `AGENTS.md` 会要求 Codex 先阅读 `UPGRADE_FOR_CODEX.md`，并保护已有的资料库、简历、设置、`user_data` 和 `tmp` 文件；升级完成后使用 `build_exe.ps1` 重新生成程序。
 
 如果需要同步 GitHub 上的新版本，也可以在仓库根目录直接告诉 Codex“从 GitHub 更新这个项目”。Codex 会先检查本地修改和受保护文件，再获取远程代码；遇到资料库、简历或设置冲突时会停止并询问，不会用远程版本覆盖本地数据。
 
@@ -93,13 +106,13 @@ release\ResumeQuickPaste.exe
 release\ResumeQuickPaste.exe
 ```
 
-AI 生成的 `.json` 文件应该放在 exe 同级的 `databases` 文件夹，也就是当前项目里的：
+AI 生成的 `.json` 文件应该放在 exe 同级的 `user_data\databases` 文件夹，也就是当前项目里的：
 
 ```text
-release\databases
+release\user_data\databases
 ```
 
-如果你把 `ResumeQuickPaste.exe` 整个复制到别的地方使用，规则仍然一样：JSON 放在 exe 同级的 `databases` 文件夹。
+如果你把 `ResumeQuickPaste.exe` 整个复制到别的地方使用，规则仍然一样：JSON 放在 exe 同级的 `user_data\databases` 文件夹。旧版放在 `databases` 里的 JSON 会在新版首次启动时复制到新目录，不会覆盖新目录里已有文件。
 
 如果你是开发者，用源码运行：
 
@@ -113,17 +126,17 @@ release\databases
 那么 JSON 应该放在项目根目录的：
 
 ```text
-databases
+user_data\databases
 ```
 
-简历 PDF、Word 或图片只给 AI 解析用，程序本身不会直接读取简历文件。程序只读取 `databases` 里的 `.json` 资料库。
+简历 PDF、Word 或图片只给 AI 解析用，程序本身不会直接读取简历文件。程序只读取 `user_data\databases` 里的 `.json` 资料库。
 
 ## 管理多份资料库
 
 程序会读取当前运行位置下的：
 
 ```text
-databases
+user_data\databases
 ```
 
 每个 `.json` 文件就是一份资料库。你可以在程序顶部新建、重命名、删除资料库，也可以直接用文本编辑器修改 JSON。
@@ -173,7 +186,7 @@ databases
 可以把不同投递方向的简历放在：
 
 ```text
-resumes_by_role
+user_data\resumes_by_role
 ```
 
 建议按投递场景建子文件夹，例如“数据分析岗位”“科研实习岗位”“产品运营岗位”。一份简历对应一个场景，也对应一个 JSON 资料库。
@@ -186,7 +199,7 @@ resumes_by_role
 AI_PROMPT_简历生成快捷文本JSON.txt
 ```
 
-你可以把这个提示词发给 AI，同时提供你的若干份简历，让 AI 按“一份简历一个 JSON”的规则生成资料库。生成后把 `.json` 文件放进对应的 `databases` 文件夹，再重启或切换资料库即可使用。
+你可以把这个提示词发给 AI，同时提供你的若干份简历，让 AI 按“一份简历一个 JSON”的规则生成资料库。生成后把 `.json` 文件放进对应的 `user_data\databases` 文件夹，再重启或切换资料库即可使用。
 
 提示词会要求 AI 先询问你要解析哪些内容；你可以直接回复“默认”。默认方案是不解析教育经历、不解析任何经历时间，只解析基本信息、经历内容、技能证书等适合粘贴到投递表单里的内容。
 
@@ -206,7 +219,7 @@ AI_PROMPT_简历生成快捷文本JSON.txt
 release\ResumeQuickPaste.exe
 ```
 
-如果没有 PyInstaller，脚本会自动用 pip 安装。脚本会保留 `release\databases` 和 `release\resumes_by_role` 中已经存在的用户资料，只补充缺少的文件，不会用根目录示例覆盖原有条目。
+如果没有 PyInstaller，脚本会自动用 pip 安装。脚本会保留 `release\user_data`、`release\databases` 和 `release\resumes_by_role` 中已经存在的用户资料，只补充缺少的示例文件，不会用根目录示例覆盖原有条目。
 
 当前构建产物是 x64 程序；Windows on ARM 可能通过系统的 x64 模拟运行，但不属于本项目已验证的原生 ARM64 构建范围。
 
@@ -220,4 +233,4 @@ JSON 打不开：通常是格式错误。请检查是否使用双引号、是否
 
 `app_settings.json` 有用吗：有用，但用户不需要手动配置。它是程序自动生成的运行设置文件，用来记录窗口置顶、自动粘贴、上次选择的资料库等偏好。删除后程序会在下次启动时按默认设置重新生成。
 
-隐私说明：本工具只读写本地文件，不上传简历或投递信息。
+隐私说明：除非你手动点击“数据同步”里的上传按钮，本工具只读写本地文件；坚果云同步只处理 `user_data\databases` 中的 JSON 资料库。

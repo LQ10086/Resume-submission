@@ -22,7 +22,10 @@ except ImportError:  # pragma: no cover - this application targets Windows
 
 
 APP_NAME = "投递文本助手"
+USER_DATA_DIR = "user_data"
 DATABASE_DIR = "databases"
+RESUME_DIR = "resumes_by_role"
+RUNTIME_DIR = "tmp"
 SETTINGS_FILE = "app_settings.json"
 DEFAULT_DB = "默认投递资料.json"
 DEFAULT_GROUP = "未分组"
@@ -131,8 +134,8 @@ def app_root() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     source_dir = Path(__file__).resolve().parent
-    # Runtime modules live in project_root/src, while editable databases,
-    # settings, documentation and tmp deliberately remain in project_root.
+    # Runtime modules live in project_root/src; personal files are kept under
+    # DATA_ROOT so the project tree stays clean for Git operations.
     return source_dir.parent if source_dir.name.lower() == "src" else source_dir
 
 
@@ -151,16 +154,18 @@ def app_data_root(application_dir: Path) -> Path:
     if override:
         candidate = Path(os.path.expandvars(os.path.expanduser(override))).resolve()
     else:
-        candidate = application_dir
+        candidate = application_dir / USER_DATA_DIR
     if _directory_is_writable(candidate):
         return candidate
-    local = Path(os.environ.get("LOCALAPPDATA", application_dir)) / "ResumeQuickPaste"
+    local = Path(os.environ.get("LOCALAPPDATA", application_dir)) / "ResumeQuickPaste" / USER_DATA_DIR
     return local if _directory_is_writable(local) else application_dir
 
 
 ROOT = app_root()
 DATA_ROOT = app_data_root(ROOT)
 DB_DIR = DATA_ROOT / DATABASE_DIR
+RESUME_ROOT = DATA_ROOT / RESUME_DIR
+TEMP_DIR = DATA_ROOT / RUNTIME_DIR
 SETTINGS_PATH = DATA_ROOT / SETTINGS_FILE
 PROJECT_ROOT = ROOT.parent if getattr(sys, "frozen", False) and ROOT.name.lower() == "release" else ROOT
 
@@ -499,10 +504,11 @@ def build_open_with_argv(template: list[str], path: Path) -> list[str]:
 
 
 def resolve_terminal_cwd(value: object) -> Path:
-    raw = os.path.expandvars(os.path.expanduser(str(value or "tmp").strip() or "tmp"))
+    raw_value = str(value or RUNTIME_DIR).strip() or RUNTIME_DIR
+    raw = os.path.expandvars(os.path.expanduser(raw_value))
     path = Path(raw)
     if not path.is_absolute():
-        path = PROJECT_ROOT / path
+        path = TEMP_DIR if raw_value.replace("\\", "/").strip("/") == RUNTIME_DIR else PROJECT_ROOT / path
     path.mkdir(parents=True, exist_ok=True)
     return path.resolve()
 
@@ -522,8 +528,9 @@ def build_codex_startup_prompt(cwd: Path) -> str:
         "这是一个管理简历投递 JSON 条目的 PySide6 桌面工具。"
         "请先阅读项目根目录中的 UPGRADE_FOR_CODEX.md 和 README.md（若存在）；"
         "在 Windows PowerShell 中读取 UTF-8 文本必须显式使用 Get-Content -Encoding UTF8。"
-        "所有修改仅限此项目；不得覆盖或删除 databases、release/databases、resumes_by_role、"
-        "release/resumes_by_role 或 app_settings.json 中的用户数据；新增设置必须兼容旧设置。"
+        "所有修改仅限此项目；不得覆盖或删除 user_data、release/user_data、databases、"
+        "release/databases、resumes_by_role、release/resumes_by_role 或 app_settings.json 中的用户数据；"
+        "新增设置必须兼容旧设置。"
         "完成后运行针对性测试；如需发布版请运行 build_exe.ps1。"
         "完成阅读后不要解释，只回复由 RS_READY_ 与 7C2A 拼接成的一行标记，然后等待用户的下一项任务。"
     )

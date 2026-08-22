@@ -7,17 +7,18 @@
 1. 不要删除、覆盖或重建 `databases/*.json`。
 2. 不要删除、覆盖或重建 `release/databases/*.json`；打包时必须保留用户已经编辑过的发布版资料库。
 3. 不要删除 `resumes_by_role`、`release/resumes_by_role` 或其中的简历文件。
-4. `app_settings.json` 是用户设置，新增设置只能合并默认值，不能丢弃已有未知字段。
-5. `tmp/` 是终端工作目录，已加入 `.gitignore`，不得把其中的临时文件加入 Git。
+4. 不要删除、覆盖或重建 `user_data`、`release/user_data`；新版默认把个人资料库、简历、同步账号、备份和运行时临时文件集中放在这里。
+5. `app_settings.json` 是用户设置，新增设置只能合并默认值，不能丢弃已有未知字段。
+6. `tmp/` 和 `user_data/tmp` 是终端/同步临时目录，已加入 `.gitignore`，不得把其中的临时文件加入 Git。
 
 ## 升级流程
 
 1. 先执行 `git status --short`，确认用户的本地修改和资料库状态。
 2. 先备份或读取现有 JSON，再修改程序；不要用示例数据覆盖真实资料。
 3. 对设置使用“默认值 + 旧设置覆盖”的迁移方式，保证旧版本仍能启动。
-4. 如果新增终端设置，默认使用 `terminal_cwd: "tmp"`，相对路径要相对于项目目录解析，并自动创建目录。
-5. 修改后先运行 `python -m py_compile src/app.py src/qt_core.py src/terminal_qt.py` 和针对性测试，再运行 `build_exe.ps1`。
-6. 打包脚本必须保留 `release/databases` 和 `release/resumes_by_role` 中已有文件；只有目标目录为空时才复制示例数据。
+4. 如果新增终端设置，默认使用 `terminal_cwd: "tmp"`；新版会把默认 `tmp` 解析到 `user_data/tmp`，用户自定义的其他相对路径仍按项目目录解析，并自动创建目录。
+5. 修改后先运行 `python -m py_compile src/app.py src/qt_core.py src/terminal_qt.py src/sync_service.py` 和针对性测试，再运行 `build_exe.ps1`。
+6. 打包脚本必须保留 `release/user_data`、`release/databases` 和 `release/resumes_by_role` 中已有文件；只有目标目录为空时才复制示例数据。
 7. 最后启动 `release/ResumeQuickPaste.exe`，确认主界面、设置、终端和原有条目都能正常打开。
 8. 应用内终端启动 `codex` 时会通过 CLI 的初始提示参数自动把本文件、项目路径和数据保护约定发送给 Codex；提示内容由程序动态生成，不要硬编码某台电脑的绝对路径。启动引导必须对用户隐藏，界面仅显示准备中、就绪或超时状态。
 9. 内置终端使用带历史记录的终端屏幕，滚轮和滚动条必须能够回看输出；主题设置需要同步覆盖主界面、条目卡片、弹窗和终端。
@@ -49,8 +50,8 @@
 1. 使用 `git status --short` 识别本地修改，并记录资料库、简历目录和设置文件的哈希或文件清单。
 2. 使用 `git fetch` 检查远程更新；不得使用 `git reset --hard`、`git clean`、`git checkout -- .` 等覆盖式命令。
 3. 远程更新若只涉及程序代码、依赖、文档和发布程序，可以采用非破坏性的快进或合并；若触及用户数据或产生冲突，必须停止并请用户决定。
-4. 更新后运行 `python -m py_compile src/app.py src/qt_core.py src/terminal_qt.py`、针对性测试和 `build_exe.ps1`，并确认受保护文件在构建前后保持一致。
-5. 推送贡献时只按白名单暂存代码、依赖、文档和明确要求发布的 exe，绝不提交个人资料、简历、设置、`tmp` 或 `build` 中间产物。
+4. 更新后运行 `python -m py_compile src/app.py src/qt_core.py src/terminal_qt.py src/sync_service.py`、针对性测试和 `build_exe.ps1`，并确认受保护文件在构建前后保持一致。
+5. 推送贡献时只按白名单暂存代码、依赖、文档和明确要求发布的 exe，绝不提交个人资料、简历、设置、同步账号、`user_data`、`tmp` 或 `build` 中间产物。
 
 ## 当前终端设置字段
 

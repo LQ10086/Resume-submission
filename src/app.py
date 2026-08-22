@@ -60,6 +60,8 @@ from qt_core import (
     ITEM_TYPE_SHORT_LABELS,
     ITEM_TYPE_TEXT,
     PROJECT_ROOT,
+    RESUME_DIR,
+    RESUME_ROOT,
     ROOT,
     SAMPLE_DATA,
     SETTINGS_PATH,
@@ -84,6 +86,18 @@ from qt_core import (
     theme_palette,
     truncate_text,
     write_json_file,
+)
+from sync_service import (
+    DEFAULT_REMOTE_DIR,
+    JIANGUOYUN_APP_PASSWORD_HELP_URL,
+    SyncCredentials,
+    WebDavError,
+    credential_path,
+    download_cloud_databases,
+    load_credentials,
+    save_credentials,
+    test_credentials,
+    upload_local_databases,
 )
 from terminal_qt import TerminalWidget, resolve_monospace_font
 
@@ -791,6 +805,238 @@ class SettingsDialog(QDialog):
         }
 
 
+def sync_error_message(exc: Exception) -> str:
+    if isinstance(exc, WebDavError):
+        return str(exc)
+    if isinstance(exc, ValueError):
+        return str(exc)
+    return f"{type(exc).__name__}: {exc}"
+
+
+class JianguoyunLoginDialog(QDialog):
+    def __init__(self, credentials: Optional[SyncCredentials], parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("登录坚果云")
+        self.resize(560, 360)
+        self.credentials: Optional[SyncCredentials] = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("坚果云数据同步")
+        title.setObjectName("syncTitle")
+        title.setStyleSheet("font-size:20px; font-weight:600;")
+        layout.addWidget(title)
+
+        note = QLabel(
+            "请输入坚果云账号邮箱和第三方应用密码。注意：这里不能使用坚果云网页登录密码，"
+            "需要在坚果云网页端单独生成第三方应用密码。"
+        )
+        note.setWordWrap(True)
+        note.setObjectName("muted")
+        layout.addWidget(note)
+
+        links = QLabel(
+            '<a href="https://cpclanding.jianguoyun.com/">注册坚果云</a>'
+            f'　<a href="{JIANGUOYUN_APP_PASSWORD_HELP_URL}">如何生成第三方应用密码</a>'
+        )
+        links.setOpenExternalLinks(True)
+        links.setObjectName("muted")
+        layout.addWidget(links)
+
+        form_host = QFrame()
+        form_host.setObjectName("syncPanel")
+        form = QFormLayout(form_host)
+        form.setContentsMargins(0, 4, 0, 4)
+        form.setVerticalSpacing(12)
+
+        self.login_edit = QLineEdit(credentials.login if credentials else "")
+        self.login_edit.setPlaceholderText("name@example.com")
+        form.addRow("账号邮箱", self.login_edit)
+
+        self.password_edit = QLineEdit(credentials.password if credentials else "")
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_edit.setPlaceholderText("坚果云第三方应用密码")
+        form.addRow("应用密码", self.password_edit)
+
+        self.show_password = QCheckBox("显示应用密码")
+        self.show_password.toggled.connect(self._toggle_password_visible)
+        form.addRow("", self.show_password)
+
+        self.remote_edit = QLineEdit(credentials.remote_dir if credentials else DEFAULT_REMOTE_DIR)
+        form.addRow("云端目录", self.remote_edit)
+        layout.addWidget(form_host)
+
+        path_label = QLabel(f"账号信息会保存在：{credential_path()}")
+        path_label.setObjectName("muted")
+        path_label.setWordWrap(True)
+        path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(path_label)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("muted")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        save_button.setText("登录并保存")
+        save_button.setProperty("accent", True)
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _validate(self) -> None:
+        login = self.login_edit.text().strip()
+        password = self.password_edit.text().strip()
+        remote_dir = self.remote_edit.text().strip() or DEFAULT_REMOTE_DIR
+        if not login or not password:
+            QMessageBox.warning(self, "账号信息不完整", "请填写坚果云账号邮箱和第三方应用密码。")
+            return
+        credentials = SyncCredentials(login=login, password=password, remote_dir=remote_dir)
+        self.status_label.setText("正在连接坚果云并检查云端目录…")
+        QApplication.processEvents()
+        try:
+            test_credentials(credentials)
+            save_credentials(credentials)
+        except Exception as exc:
+            self.status_label.setText("登录失败，请检查账号、应用密码和网络。")
+            QMessageBox.critical(self, "登录失败", sync_error_message(exc))
+            return
+        self.credentials = credentials
+        self.accept()
+
+    def _toggle_password_visible(self, visible: bool) -> None:
+        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        self.password_edit.setEchoMode(mode)
+
+
+class DataSyncDialog(QDialog):
+    downloaded = Signal()
+
+    def __init__(self, credentials: SyncCredentials, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("数据同步")
+        self.resize(620, 420)
+        self.credentials = credentials
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("坚果云数据库同步")
+        title.setStyleSheet("font-size:20px; font-weight:600;")
+        layout.addWidget(title)
+
+        desc = QLabel("同步只处理本工具的 JSON 资料库文件。上传和下载都会先弹出确认，下载前会自动备份当前本地资料库。")
+        desc.setObjectName("muted")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        info = QGroupBox("当前账号")
+        info_layout = QFormLayout(info)
+        info_layout.setVerticalSpacing(10)
+        self.account_label = QLabel()
+        self.remote_label = QLabel()
+        self.local_label = QLabel(str(DB_DIR))
+        for label in (self.account_label, self.remote_label, self.local_label):
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            label.setWordWrap(True)
+        info_layout.addRow("坚果云账号", self.account_label)
+        info_layout.addRow("云端目录", self.remote_label)
+        info_layout.addRow("本地资料库", self.local_label)
+        layout.addWidget(info)
+
+        actions = QHBoxLayout()
+        self.upload_button = QPushButton("上传本地到云端")
+        self.upload_button.setProperty("accent", True)
+        self.upload_button.clicked.connect(self.upload_local)
+        self.download_button = QPushButton("下载云端到本地")
+        self.download_button.clicked.connect(self.download_cloud)
+        actions.addWidget(self.upload_button)
+        actions.addWidget(self.download_button)
+        layout.addLayout(actions)
+
+        secondary = QHBoxLayout()
+        self.account_button = QPushButton("修改账号")
+        self.account_button.clicked.connect(self.change_account)
+        close_button = QPushButton("关闭")
+        close_button.clicked.connect(self.accept)
+        secondary.addWidget(self.account_button)
+        secondary.addStretch(1)
+        secondary.addWidget(close_button)
+        layout.addLayout(secondary)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("muted")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+        layout.addStretch(1)
+        self._refresh_account_labels()
+
+    def _refresh_account_labels(self) -> None:
+        self.account_label.setText(self.credentials.login)
+        self.remote_label.setText(self.credentials.remote_dir)
+
+    def _set_busy(self, busy: bool, message: str = "") -> None:
+        for button in (self.upload_button, self.download_button, self.account_button):
+            button.setEnabled(not busy)
+        if message:
+            self.status_label.setText(message)
+        QApplication.processEvents()
+
+    def upload_local(self) -> None:
+        files = sorted(path.name for path in DB_DIR.glob("*.json"))
+        if not files:
+            QMessageBox.information(self, "没有可上传的资料库", "本地资料库目录里没有 JSON 文件。")
+            return
+        message = (
+            f"将把本地 {len(files)} 个 JSON 资料库上传到坚果云：\n\n"
+            f"{self.credentials.remote_dir}\n\n"
+            "同名云端文件会被覆盖。确定继续吗？"
+        )
+        if QMessageBox.question(self, "确认上传到云端", message) != QMessageBox.StandardButton.Yes:
+            return
+        self._set_busy(True, "正在上传本地资料库到坚果云…")
+        try:
+            uploaded = upload_local_databases(self.credentials)
+        except Exception as exc:
+            self._set_busy(False, "上传失败。")
+            QMessageBox.critical(self, "上传失败", sync_error_message(exc))
+            return
+        self._set_busy(False, f"上传完成：{len(uploaded)} 个资料库已覆盖到云端。")
+        QMessageBox.information(self, "上传完成", f"已上传 {len(uploaded)} 个资料库。")
+
+    def download_cloud(self) -> None:
+        message = (
+            f"将从坚果云目录下载 JSON 资料库并覆盖本地同名文件：\n\n"
+            f"{self.credentials.remote_dir}\n\n"
+            "下载前会备份当前本地资料库；本地独有的其他 JSON 文件不会被删除。确定继续吗？"
+        )
+        if QMessageBox.question(self, "确认从云端覆盖本地", message) != QMessageBox.StandardButton.Yes:
+            return
+        self._set_busy(True, "正在从坚果云下载资料库…")
+        try:
+            downloaded, backup_dir = download_cloud_databases(self.credentials)
+        except Exception as exc:
+            self._set_busy(False, "下载失败。")
+            QMessageBox.critical(self, "下载失败", sync_error_message(exc))
+            return
+        backup_text = f"\n本地备份：{backup_dir}" if backup_dir else ""
+        self._set_busy(False, f"下载完成：{len(downloaded)} 个资料库已写入本地。")
+        QMessageBox.information(self, "下载完成", f"已下载 {len(downloaded)} 个资料库。{backup_text}")
+        self.downloaded.emit()
+
+    def change_account(self) -> None:
+        dialog = JianguoyunLoginDialog(self.credentials, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.credentials is None:
+            return
+        self.credentials = dialog.credentials
+        self._refresh_account_labels()
+        self.status_label.setText("账号信息已更新。")
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -836,10 +1082,22 @@ class MainWindow(QMainWindow):
                     shutil.copy2(source, destination)
         if not any(DB_DIR.glob("*.json")):
             write_json_file(DB_DIR / DEFAULT_DB, SAMPLE_DATA)
+        RESUME_ROOT.mkdir(parents=True, exist_ok=True)
+        bundled_resumes = ROOT / RESUME_DIR
+        if bundled_resumes.exists() and bundled_resumes.resolve() != RESUME_ROOT.resolve() and not any(RESUME_ROOT.rglob("*")):
+            for source in bundled_resumes.iterdir():
+                destination = RESUME_ROOT / source.name
+                if destination.exists():
+                    continue
+                if source.is_dir():
+                    shutil.copytree(source, destination)
+                else:
+                    shutil.copy2(source, destination)
 
     def _build_ui(self) -> None:
         settings_menu = self.menuBar().addMenu("设置")
         settings_menu.addAction("设置", self.open_settings)
+        settings_menu.addAction("数据同步", self.open_data_sync)
         settings_menu.addAction("打开/隐藏终端", self.toggle_terminal)
         settings_menu.addAction("显示条目信息", self.show_info_panel)
         item_menu = self.menuBar().addMenu("条目")
@@ -1109,6 +1367,26 @@ class MainWindow(QMainWindow):
         elif self.side_tabs.isVisible():
             self.show_info_panel()
         self.status_label.setText("设置已保存。")
+
+    def open_data_sync(self) -> None:
+        credentials = load_credentials()
+        if credentials is None:
+            login_dialog = JianguoyunLoginDialog(None, self)
+            if login_dialog.exec() != QDialog.DialogCode.Accepted or login_dialog.credentials is None:
+                return
+            credentials = login_dialog.credentials
+        dialog = DataSyncDialog(credentials, self)
+        dialog.downloaded.connect(self._reload_after_cloud_download)
+        dialog.exec()
+
+    def _reload_after_cloud_download(self) -> None:
+        current = self.current_db
+        self.refresh_databases()
+        if current:
+            index = self.db_combo.findText(current)
+            if index >= 0:
+                self.db_combo.setCurrentIndex(index)
+        self.status_label.setText("已从坚果云下载资料库，并刷新本地列表。")
 
     def refresh_databases(self) -> None:
         files = sorted(path.name for path in DB_DIR.glob("*.json"))
